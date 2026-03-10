@@ -89,8 +89,6 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-On Windows, replace `source .venv/bin/activate` with `.venv\Scripts\activate`.
-
 ---
 
 ## Running the tests
