@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+*.egg
+dist/
+build/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Generated output directories (produced at runtime by experiment scripts)
+plot_christoffel_comparison/
+error_charts_polynomial/
+test_christoffel/
+
+# Data and results
+*.csv
+*.pkl
+*.npy
+*.npz
+
+# Plots
+*.png
+*.pdf
+*.svg
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Pytest
+.pytest_cache/
+htmlcov/
+.coverage
