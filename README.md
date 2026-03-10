@@ -1,10 +1,12 @@
-# Mollified Christoffel-Darboux Kernels — Numerical Experiments
+# Mollified Christoffel–Darboux Kernels — Numerical Experiments
 
-This repository contains the numerical experiments for the paper:
+This repository contains the numerical experiments accompanying the paper
 
-> **Mollified Christoffel-Darboux Kernels and Density Recovery on Varieties**
-> Leandro Bentancur, Didier Henrion, Mauricio Velasco
-> Preprint, 2025. *(arXiv link to be added)*
+**Mollified Christoffel–Darboux Kernels and Density Recovery on Varieties**  
+Leandro Bentancur, Didier Henrion, Mauricio Velasco  
+
+Preprint available at:  
+https://hal.science/hal-05544709
 
 ---
 
