@@ -10,12 +10,6 @@ This repository contains the numerical experiments for the paper:
 
 ## What this code does
 
-The classical Christoffel-Darboux (CD) polynomial associated with a probability measure μ
-on a compact domain encodes geometric information about the support of μ, but does not
-directly recover the density f of μ with respect to a reference measure. Doing so requires
-explicit knowledge of the equilibrium measure of the domain, which is available only in
-special cases such as boxes, balls, or other highly symmetric domains.
-
 This code implements the **Mollified Christoffel-Darboux (MCD) density estimator** on the
 unit sphere S^{n-1} ⊂ R^n. The key idea is to replace the point-evaluation functional in
 the variational characterization of the CD kernel by a smoothed (mollified) version. This
