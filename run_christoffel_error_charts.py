@@ -5,25 +5,8 @@ import time
 from pathlib import Path
 
 import harmonic_basis as hb
-import mollifiers as mol
-import densities as dens
-import christoffel as ch
-from quadrature_S import sphere_Quadrature
-
-
-# =========================================================
-# Density registry
-# All available densities for the sphere S^{n-1}.
-# To add a new density: add an entry here, no other changes needed.
-# =========================================================
-
-DENSITY_REGISTRY = {
-    "constant":                 lambda X: dens.constant_density(X, numvars=X.shape[1]),
-    "von_mises_kappa2":         lambda X: dens.von_mises_fisher_density(X, numvars=X.shape[1], kappa=2.0),
-    "von_mises_kappa3":         lambda X: dens.von_mises_fisher_density(X, numvars=X.shape[1], kappa=3.0),
-    "mixture_von_mises_kappa3": lambda X: dens.mixture_von_mises_sphere(X, numvars=X.shape[1], kappas=[3.0, 3.0, 3.0]),
-    "mixture_von_mises_kappa5": lambda X: dens.mixture_von_mises_sphere(X, numvars=X.shape[1], kappas=[5.0, 5.0, 5.0]),
-}
+import error_decomposition as ed
+from densities import DENSITY_REGISTRY
 
 
 # =========================================================
@@ -104,53 +87,18 @@ if __name__ == "__main__":
         t1 = time.time()
         print(f"Basis built in {t1 - t0:.3f}s")
 
-        hb.check_basis_orthonormality(
-            basis, numvars, max_degree=deg, tol=1e-6, verbose=False)
+        # (Basis orthonormality is covered by the test suite, so it is not
+        # re-checked here; doing so would only slow the convergence sweep.)
 
-        # Mollifier: polynomial at degree floor(deg^(4/3))  [paper default]
-        mollifier = mol.default_mollifier(numvars=numvars, deg=deg)
-
-        t2 = time.time()
-
-        # --- Quadrature ---
-        quad_points, quad_weights = sphere_Quadrature(numvars, 2 * deg)
-        quad_points  = np.asarray(quad_points,  dtype=np.float64)
-        quad_weights = np.asarray(quad_weights, dtype=np.float64)
-
-        # --- Normalize density ---
-        f_vals = f_callable(quad_points).astype(float)
-        f_vals /= np.sum(quad_weights * f_vals)
-
-        # --- Moment matrix ---
-        moment_matrix = ch.compute_moment_matrix_on_sphere(
-            basis, f_callable, numvars=numvars,
-            method="quadrature", quadrature_degree=2*deg)
-
-        # --- MCD estimator ---
-        christoffel_poly  = ch.mollified_christoffel_evaluator(
-            quad_points, moment_matrix, basis, numvars, deg, mollifier)
-        christoffel_func  = 1.0 / christoffel_poly
-        christoffel_approx = christoffel_func / np.sum(quad_weights * christoffel_func)
-
-        # --- Infinite Christoffel (theoretical reference) ---
-        infinite_approx = ch.compute_infinite_christoffel(
-            quad_points, quad_weights, f_vals, mollifier)
-
-        # --- Errors ---
-        total_err  = christoffel_approx - f_vals
-        proj_err   = christoffel_approx - infinite_approx
-        approx_err = infinite_approx    - f_vals
-
-        total_error_L2  = float(np.sqrt(np.sum(quad_weights * total_err**2) / np.sum(quad_weights)))
-        proj_error_L2   = float(np.sqrt(np.sum(quad_weights * proj_err**2)) / np.sum(quad_weights))
-        approx_error_L2 = float(np.sqrt(np.sum(quad_weights * approx_err**2)) / np.sum(quad_weights))
+        # Mollifier defaults to the polynomial mollifier, k = floor(deg^(4/3)).
+        result = ed.decompose_errors(basis, f_callable, numvars, deg)
 
         t3 = time.time()
-        print(f"Done in {t3 - t2:.3f}s")
+        print(f"Done in {t3 - t1:.3f}s")
 
-        results["total"].append(total_error_L2)
-        results["projection"].append(proj_error_L2)
-        results["approximation"].append(approx_error_L2)
+        results["total"].append(result.total_L2)
+        results["projection"].append(result.proj_L2)
+        results["approximation"].append(result.approx_L2)
 
     # =========================================================
     # Print slopes

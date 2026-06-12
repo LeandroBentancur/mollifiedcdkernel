@@ -1,161 +1,43 @@
 import numpy as np
-import sympy as sp
 import harmonic_analysis_1d as ha1
 import harmonic_basis as hb
+import mollifiers as mol
 from quadrature_S import sphere_Quadrature
-from scipy.special import roots_gegenbauer
 import time
 
-def sample_uniform_sphere(numvars, n_points, seed=None):
-    """
-    Generate points uniformly distributed on the sphere S^{numvars-1}.
-
-    Parameters:
-    numvars : ambient dimension (points lie in R^{numvars} on S^{numvars-1})
-    n_points : number of points to generate.
-    seed : optional 
-
-    Returns:
-    X : ndarray (n_points, numvars) uniform points on the sphere.
-    """
-
-    rng = np.random.default_rng(seed)
-    X = rng.standard_normal(size=(n_points, numvars))
-
-    norms = np.linalg.norm(X, axis=1, keepdims=True)
-    X = X / norms
-
-    return X
 
 def compute_moment_matrix_on_sphere(
     basis_funcs,
     density,
     numvars,
-    method="montecarlo", # admits 'montecarlo' and 'quadrature'
-    N_MC:int=None,
-    quadrature_degree=None,
-    seed:int= 42
+    quadrature_degree,
 ):
     """
-    Compute the moment matrix M_{ij} = ∫ φ_i(y) φ_j(y) f(y) dy
-    over the sphere S^{numvars-1}, using Monte-Carlo quadrature,
-    where {φ_i} is basis_funcs a set of functions over the sphere.
-    """
-    
-    basis_dim = len(basis_funcs)
+    Compute the moment matrix M_{ij} = ∫ φ_i(y) φ_j(y) f(y) dy over the
+    sphere S^{numvars-1} using the spherical Gauss product quadrature rule,
+    where {φ_i} = basis_funcs is a set of functions on the sphere and f is the
+    density.
 
-    # Build points and weights
-    if method == "montecarlo":
-        Points = sample_uniform_sphere(numvars = numvars, n_points=N_MC, seed= seed)
-        # Surface area of S^{numvars-1}
-        area = hb.sphere_area(numvars)
-        # Vector of size of Points and uniform weights
-        weights = np.full(N_MC, float(area / N_MC), dtype=np.float64)
-    elif method == "quadrature":
-        if quadrature_degree is None:
-            raise ValueError("quadrature_degree must be provided when method='quadrature'.")
-        Points, weights = sphere_Quadrature(numvars=numvars, exactness_degree=quadrature_degree)
-    else:
-        raise ValueError(f"Unknown method '{method}'. Use 'montecarlo' or 'quadrature.")
+    density may be a callable f(X) -> values, or a constant (int/float).
+    """
+    Points, weights = sphere_Quadrature(numvars=numvars, exactness_degree=quadrature_degree)
     Points = np.asarray(Points, dtype=np.float64)
+    weights = np.asarray(weights, dtype=np.float64)
     n_points = Points.shape[0]
 
-    # Evaluate the density
-    # It takes into account three different types of functions
+    # Evaluate the density at the quadrature nodes
     if callable(density):
-        # numpy function
         density_vals = np.asarray(density(Points), dtype=np.float64)
-    elif isinstance(density, (int, float, np.floating)):
-        # constant
-        density_vals = np.full(n_points, float(density), dtype=np.float64)
     else:
-        # Symbolic expression
-        Y_syms = sp.symbols([f"y{i+1}" for i in range(numvars)])
-        density_np = sp.lambdify(Y_syms, density, "numpy")
-        density_vals = np.array([density_np(*pt) for pt in Points], dtype=np.float64)
+        # constant density
+        density_vals = np.full(n_points, float(density), dtype=np.float64)
 
-    # Evaluate basis
-    PHI = np.empty((basis_dim, n_points), dtype=np.float64)
-    for i, phi in enumerate(basis_funcs):
-        PHI[i, :] = np.asarray(phi(Points), dtype=np.float64).ravel()
-
-    # --- moment matrix ---
+    # Evaluate basis (per-degree fast path) and assemble M = Φ diag(f·w) Φ^T
+    PHI = hb.evaluate_basis_matrix(basis_funcs, Points)
     final_weights = density_vals * weights
-    # M = PHI @ (PHI * weights[None, :]).T
     M = np.einsum('ik,jk,k->ij', PHI, PHI, final_weights, optimize=True)
-    # Enforce symmetry 
-    M = 0.5 * (M + M.T)
+    M = 0.5 * (M + M.T)   # enforce symmetry
     return np.asarray(M, dtype=np.float64)
-
-
-def compute_tau_k(numvars: int, mollifier,
-                  quadrature_degree: int, verbose: bool = False):
-    """
-    Compute  τ_k = ∫_{S^{d-1}} g(<x,y>)^2 dy(y)  using 1D Gauss–Gegenbauer quadrature,
-    where g is the mollifier provided.
-
-    Parameters
-    numvars : ambient dimension (S^{numvars-1})
-    quadrature_degree : degree of quadrature
-    mollifier : If not None, this function is evaluated instead of g_n.
-    """
-
-    # Gegenbauer parameter
-    alpha = (numvars - 2) / 2.0
-
-    # Gauss–Gegenbauer nodes and weights
-    xk, wk = roots_gegenbauer(quadrature_degree, alpha)
-
-    # Evaluate the integrand g(x)^2 on the quadrature nodes
-    vals = np.asarray(mollifier(xk), dtype=float)
-    vals_sq = vals * vals
-
-    # 1D quadrature approximation of ∫ g_n(t)^2 w(t) dt
-    I = np.sum(wk * vals_sq)
-
-    # Funk–Hecke normalization factor to lift the 1D integral to the sphere
-    C_numvars = hb.funk_hecke_constant_cached(numvars)
-
-    tau_k = C_numvars * I
-
-    if verbose:
-        print(
-            f"[compute_tau_k] numvars={numvars}, quadrature_degree={quadrature_degree}\n"
-            f"  Integral = {I:.6e}, C_numvars = {C_numvars:.6e}, tau_k = {tau_k:.6e}"
-        )
-
-    return tau_k
-
-
-def degree_multiplicity_vector(numvars: int, max_degree: int):
-    """
-    Return the list of harmonic degrees associated with the orthonormal
-    spherical harmonic basis up to the given maximum degree.
-
-    For each degree d, the multiplicity is equal to the dimension of the
-    space of spherical harmonics of degree d in R^{numvars}. The output
-    is a flat list where each degree appears as many times as its
-    multiplicity.
-
-    Parameters
-    numvars : ambient dimension (points lie on S^{numvars-1}).
-    max_degree : maximum harmonic degree to include.
-
-    Returns
-    A list of degrees with multiplicities, in ascending order.
-    """
-    # Basic validation
-    if numvars < 2:
-        raise ValueError("numvars must be >= 2.")
-    if max_degree < 0:
-        raise ValueError("max_degree must be >= 0.")
-
-    # Compute multiplicities for degrees 0,...,max_degree
-    dims = [hb.harmonics_dimension(numvars, d) for d in range(max_degree + 1)]
-    degrees = [d for d, m in enumerate(dims) for _ in range(m)]
-
-    return degrees
-
 
 
 def compute_lambda_vector_for_basis(
@@ -228,7 +110,6 @@ def mollified_christoffel_evaluator(
     degree: int,
     mollifier,
     verbose: bool = False,
-    epsilon: float = 1e-15,
 ):
     """
     Evaluate the mollified Christoffel polynomial at a set of points X.
@@ -254,19 +135,13 @@ def mollified_christoffel_evaluator(
     if moment_matrix.shape[0] != moment_matrix.shape[1]:
         raise ValueError("moment_matrix must be square (dim_basis x dim_basis).")
 
-    # Evaluate the harmonic basis functions across X
-    phi_evaluated = np.empty((dim_basis, n_points), dtype=float)
-    for j, basis_func in enumerate(harmonic_basis):
-        vals = basis_func(X)
-        vals = np.asarray(vals, dtype=float).ravel()
-        if vals.shape[0] != n_points:
-            raise ValueError(
-                f"Basis function {j} returned array of length {vals.shape[0]}; expected {n_points}."
-            )
-        phi_evaluated[j, :] = vals
-    
-
-
+    # Evaluate the harmonic basis functions across X (per-degree fast path)
+    phi_evaluated = hb.evaluate_basis_matrix(harmonic_basis, X)
+    if phi_evaluated.shape[0] != dim_basis:
+        raise ValueError(
+            f"Basis returned {phi_evaluated.shape[0]} functions; expected {dim_basis} "
+            "to match the moment matrix."
+        )
 
     # Calculate the projection coefficients of h_x (y) = mollifier(<x,y>) for x in X
     lambda_vector = compute_lambda_vector_for_basis(
@@ -312,11 +187,89 @@ def mollified_christoffel_evaluator(
 
     return gamma
 
+
+def mcd_polynomial(
+    density,
+    numvars: int,
+    degree: int,
+    eval_points: np.ndarray,
+    basis=None,
+    mollifier=None,
+    moment_quadrature_degree: int = None,
+):
+    """
+    Evaluate the Mollified Christoffel-Darboux polynomial MCD_d(x, x) at
+    eval_points on S^{numvars-1}.
+
+    The moment matrix of the target measure (whose density is `density`) is
+    built by quadrature, the mollified evaluation functionals are projected via
+    Funk-Hecke, and MCD(x, x) = h_x^T M^{-1} h_x is returned at each x.
+
+    density     : callable f(X) -> values, or a constant, defining the moments.
+    numvars     : ambient dimension; points lie on S^{numvars-1}.
+    degree      : harmonic degree d.
+    eval_points : (m, numvars) points on the sphere.
+    basis       : optional orthonormal harmonic basis up to `degree`; built on
+                  demand if omitted.
+    mollifier   : 1D mollifier g(t); default polynomial mollifier, k = floor(d^(4/3)).
+    moment_quadrature_degree : exactness of the moment-matrix quadrature;
+                  default 2*degree.
+
+    Returns (poly, moment_matrix): poly has shape (m,), moment_matrix is (N, N).
+    """
+    if basis is None:
+        basis = hb.orthonormal_harmonic_basis_up_to_degree(numvars, degree)
+    if mollifier is None:
+        mollifier = mol.default_mollifier(numvars=numvars, deg=degree)
+    if moment_quadrature_degree is None:
+        moment_quadrature_degree = 2 * degree
+
+    eval_points = np.asarray(eval_points, dtype=np.float64)
+    moment_matrix = compute_moment_matrix_on_sphere(
+        basis, density, numvars, moment_quadrature_degree)
+    poly = mollified_christoffel_evaluator(
+        eval_points, moment_matrix, basis, numvars, degree, mollifier)
+    return poly, moment_matrix
+
+
+def estimate_density(
+    density,
+    numvars: int,
+    degree: int,
+    eval_points: np.ndarray,
+    normalize_weights=None,
+    **kwargs,
+):
+    """
+    Mollified Christoffel-Darboux density estimate f_hat = 1 / MCD_d(x, x) at
+    eval_points on S^{numvars-1}.
+
+    High-level entry point: it builds the moment matrix and the MCD polynomial
+    (see mcd_polynomial) and inverts. The pointwise norm ||phi||^2 that appears
+    in the theoretical estimate f_hat = ||phi||^2 / MCD cancels under the
+    self-normalization below, so it is not formed explicitly.
+
+    If `normalize_weights` is given — quadrature weights at eval_points that cover
+    the sphere — the estimate is rescaled to integrate to 1 against them.
+    Extra keyword arguments (basis, mollifier, moment_quadrature_degree) are
+    forwarded to mcd_polynomial.
+
+    Returns f_hat of shape (m,).
+    """
+    poly, _ = mcd_polynomial(density, numvars, degree, eval_points, **kwargs)
+    f_hat = 1.0 / poly
+    if normalize_weights is not None:
+        normalize_weights = np.asarray(normalize_weights, dtype=np.float64)
+        f_hat = f_hat / np.sum(normalize_weights * f_hat)
+    return f_hat
+
+
 def compute_infinite_christoffel(
     quad_points: np.ndarray,
     quad_weights: np.ndarray,
     density_vals: np.ndarray,
     mollifier,
+    block: int = 512,
 ) -> np.ndarray:
     """
     Compute the infinite-degree Christoffel function (theoretical reference)
@@ -329,16 +282,21 @@ def compute_infinite_christoffel(
     mollifier is the 1D function g(t) defining the kernel K(x,y) = g(<x,y>)^2.
 
     Returns an array of shape (N,) normalized to integrate to 1.
+
+    The reference is P_inf(x) = ∫ g(<x,y>)^2 / f(y) dy, whose integrand is an
+    N×N matrix. It is computed in row tiles of at most `block` evaluation points
+    so peak memory is O(block·N) instead of O(N^2); the per-row reduction is
+    unchanged, so the result is bit-for-bit identical to forming the full matrix.
     """
-    # K(x, y) = g(<x,y>)^2 / f(y), integrated over y
-    inner_products = quad_points @ quad_points.T          # (N, N)
-    mollifier_vals = np.array(
-        [mollifier(row) for row in inner_products]
-    )                                                      # (N, N)
-    integrand = mollifier_vals ** 2 / density_vals[None, :]
-    infinite_christoffel_poly = np.sum(
-        integrand * quad_weights[None, :], axis=1
-    )                                                      # (N,)
+    N = quad_points.shape[0]
+    infinite_christoffel_poly = np.empty(N, dtype=float)
+    for start in range(0, N, block):
+        stop = min(start + block, N)
+        # K(x, y) = g(<x,y>)^2 / f(y) for x in this tile, integrated over y
+        inner_products = quad_points[start:stop] @ quad_points.T   # (b, N)
+        integrand = mollifier(inner_products) ** 2 / density_vals[None, :]
+        infinite_christoffel_poly[start:stop] = np.sum(
+            integrand * quad_weights[None, :], axis=1)             # (b,)
     infinite_christoffel_func = 1.0 / infinite_christoffel_poly
     norm = np.sum(quad_weights * infinite_christoffel_func)
     return infinite_christoffel_func / norm

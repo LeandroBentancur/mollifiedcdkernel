@@ -38,26 +38,20 @@ def _face_average(values):
 def _evaluate_mollified_christoffel(
     X_grid,
     harmonic_basis,
-    moment_matrix,
+    density,
     numvars,
     degree,
-    mollifier_1d
+    mollifier_1d,
 ):
-    """Evaluate mollified Christoffel and return an L1-normalized array.
+    """Evaluate the MCD density estimate on X_grid, RMS-normalized for display.
 
-    The function returns values normalized by their mean so that the
-    returned array has mean 1, matching the previous behaviour.
+    Returns 1/MCD scaled to unit root-mean-square so that all panels share a
+    colour scale. This display normalization is distinct from the integrate-to-1
+    normalization used in the error study (error_decomposition.py).
     """
-    values = ch.mollified_christoffel_evaluator(
-    X_grid,
-    harmonic_basis=harmonic_basis,
-    moment_matrix=moment_matrix,
-    numvars=numvars,
-    degree=degree,
-    mollifier=mollifier_1d,
-    verbose=False,
-    )
-    values = 1.0 / values
+    values = ch.estimate_density(
+        density, numvars, degree, X_grid,
+        basis=harmonic_basis, mollifier=mollifier_1d)
     values = values.astype(float)
     values /= np.sqrt(np.mean(values**2))
     return values
@@ -214,27 +208,12 @@ def plot_mollified_christoffel_comparison_on_sphere_3(
     # -----------------------------
     numvars = 3
 
-    moment_matrix_1 = ch.compute_moment_matrix_on_sphere(
-        basis_funcs=basis_list[0], density=density, numvars=numvars,
-        method="quadrature", quadrature_degree=2 * degrees[0])
-    moment_matrix_2 = ch.compute_moment_matrix_on_sphere(
-        basis_funcs=basis_list[1], density=density, numvars=numvars,
-        method="quadrature", quadrature_degree=2 * degrees[1])
-    moment_matrix_3 = ch.compute_moment_matrix_on_sphere(
-        basis_funcs=basis_list[2], density=density, numvars=numvars,
-        method="quadrature", quadrature_degree=2 * degrees[2])
-
     f_approx_1_flat = _evaluate_mollified_christoffel(
-        X_grid, harmonic_basis=basis_list[0], moment_matrix=moment_matrix_1, numvars=numvars, degree=degrees[0], mollifier_1d=mollifier_1d_list[0]
-    )
-
+        X_grid, basis_list[0], density, numvars, degrees[0], mollifier_1d_list[0])
     f_approx_2_flat = _evaluate_mollified_christoffel(
-        X_grid, harmonic_basis=basis_list[1], moment_matrix=moment_matrix_2, numvars=numvars, degree=degrees[1], mollifier_1d=mollifier_1d_list[1]
-    )
-
+        X_grid, basis_list[1], density, numvars, degrees[1], mollifier_1d_list[1])
     f_approx_3_flat = _evaluate_mollified_christoffel(
-        X_grid, harmonic_basis=basis_list[2], moment_matrix=moment_matrix_3, numvars=numvars, degree=degrees[2], mollifier_1d=mollifier_1d_list[2]
-    )
+        X_grid, basis_list[2], density, numvars, degrees[2], mollifier_1d_list[2])
 
     # -----------------------------
     # Reshape to grid

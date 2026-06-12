@@ -29,7 +29,6 @@ def test_moment_matrix_is_identity_for_constant_density():
         basis_funcs=basis,
         density=1.0,          # constant density = 1
         numvars=numvars,
-        method="quadrature",
         quadrature_degree=2 * degree + 1,
     )
     err = np.max(np.abs(M - np.eye(len(basis))))
@@ -45,7 +44,6 @@ def test_moment_matrix_is_symmetric():
         basis_funcs=basis,
         density=lambda X: dens.von_mises_fisher_density(X, numvars=numvars, kappa=3.0),
         numvars=numvars,
-        method="quadrature",
         quadrature_degree=2 * degree,
     )
     assert np.max(np.abs(M - M.T)) < 1e-12, "Moment matrix is not symmetric"
@@ -88,7 +86,7 @@ def test_mcd_estimator_returns_positive_values():
 
     M = ch.compute_moment_matrix_on_sphere(
         basis, density, numvars=numvars,
-        method="quadrature", quadrature_degree=2 * degree)
+        quadrature_degree=2 * degree)
 
     gamma = ch.mollified_christoffel_evaluator(
         pts, M, basis, numvars, degree, mollifier)
@@ -114,7 +112,7 @@ def test_mcd_estimate_integrates_to_one():
 
     M = ch.compute_moment_matrix_on_sphere(
         basis, density, numvars=numvars,
-        method="quadrature", quadrature_degree=2 * degree)
+        quadrature_degree=2 * degree)
 
     gamma    = ch.mollified_christoffel_evaluator(
         pts, M, basis, numvars, degree, mollifier)
@@ -122,3 +120,58 @@ def test_mcd_estimate_integrates_to_one():
     mass     = float(np.sum(wts * estimate / np.sum(wts * estimate)))
 
     assert abs(mass - 1.0) < 1e-10, f"Normalized estimate integrates to {mass:.6f}, expected 1"
+
+
+def test_estimate_density_matches_manual_pipeline():
+    """
+    The estimate_density public API must reproduce the manual moment-matrix +
+    evaluator + inversion path bit-for-bit, and integrate to 1.
+    """
+    numvars, degree = 3, 5
+    basis     = hb.orthonormal_harmonic_basis_up_to_degree(numvars, degree)
+    mollifier = mol.default_mollifier(numvars=numvars, deg=degree)
+    density   = lambda X: dens.von_mises_fisher_density(X, numvars=numvars, kappa=3.0)
+
+    pts, wts = sphere_Quadrature(numvars, 2 * degree)
+    pts = np.asarray(pts, dtype=np.float64)
+    wts = np.asarray(wts, dtype=np.float64)
+
+    # Manual pipeline
+    M = ch.compute_moment_matrix_on_sphere(
+        basis, density, numvars=numvars, quadrature_degree=2 * degree)
+    gamma  = ch.mollified_christoffel_evaluator(pts, M, basis, numvars, degree, mollifier)
+    manual = 1.0 / gamma
+    manual /= np.sum(wts * manual)
+
+    # Public API
+    est = ch.estimate_density(
+        density, numvars, degree, pts,
+        normalize_weights=wts, basis=basis, mollifier=mollifier)
+
+    assert np.array_equal(est, manual), "estimate_density deviates from the manual pipeline"
+    assert abs(np.sum(wts * est) - 1.0) < 1e-10
+
+
+def test_infinite_christoffel_tiling_is_exact():
+    """
+    The row-tiled infinite Christoffel must equal the full-matrix computation
+    bit-for-bit, for any block size (including a single tile, block >= N).
+    """
+    numvars, degree = 3, 6
+    density = lambda X: dens.von_mises_fisher_density(X, numvars=numvars, kappa=3.0)
+
+    pts, wts = sphere_Quadrature(numvars, 2 * degree)
+    pts = np.asarray(pts, dtype=np.float64)
+    wts = np.asarray(wts, dtype=np.float64)
+    fv  = density(pts); fv = fv / np.sum(wts * fv)
+    moll = mol.default_mollifier(numvars=numvars, deg=degree)
+
+    # Full-matrix reference (the previous implementation)
+    ip   = pts @ pts.T
+    poly = np.sum((moll(ip) ** 2 / fv[None, :]) * wts[None, :], axis=1)
+    func = 1.0 / poly
+    ref  = func / np.sum(wts * func)
+
+    for block in (7, 100, 10 ** 9):
+        out = ch.compute_infinite_christoffel(pts, wts, fv, moll, block=block)
+        assert np.array_equal(out, ref), f"tiling changed the result at block={block}"

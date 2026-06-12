@@ -8,52 +8,7 @@
 # Used here with permission.
 
 import numpy as np
-import sympy as sp
 import math as math
-from functools import reduce
-import operator
-
-def Gegenbauer_poly(alpha : float, j: int, t):
-    if j==0: return t**0
-    if j==1: return 2*alpha*t
-    if j>1:
-        return (1/(j))*(2*t*(j+alpha-1)* Gegenbauer_poly(alpha, j-1,t) -(j+2*alpha-2)* Gegenbauer_poly(alpha,j-2,t))
-
-def fast_evaluate_Gegenbauer_poly(alpha: float, j: int, t):
-    assert j>=0, "Gegenbauer degree must be positive"
-    minlen = max(j+1,2)
-    results_array = np.zeros(minlen)
-    results_array[0] = 1.0
-    results_array[1] = 2*alpha*t
-    #evaluate base cases if needed
-    if j<=1:
-        return results_array[j]
-    else:
-        #needs to use recursion   
-        for k in range(2,j+1):
-            n=k-1
-            results_array[k] =  (2*(n+alpha)/(n+1))*t*results_array[k-1]-((n+2*alpha-1)/(n+1))*results_array[k-2]
-    return results_array[j]
-
-def test_gegenbauer_implementations_agreement():
-    for degree in range(3,20):
-        alpha = (degree-2)/2
-        t=sp.symbols("t")
-        gb = Gegenbauer_poly(alpha,degree,t)
-        for tvalue in [0.0,0.1,0.5,0.7,0.9]:
-            assert np.abs(fast_evaluate_Gegenbauer_poly(alpha,degree,tvalue)-gb.subs(t,tvalue))<1e-6
-
-def Chebyshev_poly_1st_kind(j: int, t):
-    if j==0: return t**0
-    if j==1: return t
-    if j>1:
-        return 2*t*Chebyshev_poly_1st_kind(j-1, t) - Chebyshev_poly_1st_kind(j-2, t)
-
-def Legendre_poly(j: int, t):
-    if j==0: return t**0
-    if j==1: return t
-    if j>1:
-        return (1/j)*((2*(j-1)+1)*t*Legendre_poly(j-1,t)-(j-1)*Legendre_poly(j-2,t))
 
 #Computation of Gaussian quadrature weights via Golub-Welsh method
 #We express the root finding problem as an eigenvalue estimation 
@@ -82,16 +37,6 @@ def weighted_Gaussian_Qrule_GW(alpha, degree: int):
     for w in eigenvectors.T:
         weights.append((w[0]**2)*moment_of_one)
     return (roots,weights)
-
-def weighted_Gaussian_roots_in_interval(numvars : int, degree_poly):
-    assert numvars>=2,"roots for gaussian weights with alpha = (n-2)/2 or on circle"
-    if numvars == 2:
-        #we return the roots of the Chebyshev
-        return np.array([np.cos(np.pi/(2*degree_poly)+k*(np.pi)/degree_poly) for k in range(degree_poly)])
-    if numvars >=3:
-        alpha = (numvars-2)/2
-        roots, weights = weighted_Gaussian_Qrule_GW(alpha,degree_poly)
-        return roots
 
 #-----------------------------------------------------------------------
 # Now spherical quadrature rule.
@@ -133,28 +78,3 @@ def sphere_Quadrature(numvars, exactness_degree : int):
     for k in range(2,numvars):
         roots, weights = sphere_Qrule_inductive_step(roots,weights,exactness_degree)#now on three-sphere
     return roots, weights
-
-def integrate_with_quadrature(polynom, roots, weights, variables):
-    res = 0.0
-    for index, (root, weight) in enumerate(zip(roots,weights)):
-        list_subs = list(zip(variables,root))
-        term = polynom.subs(list_subs)*weight
-        res+=term
-    return res
-
-def integrate_bbox_func_with_quadrature(box_func, roots, weights):
-    #box_func is a function which given a point x returns f(x) 
-    res = 0.0
-    for index, (root, weight) in enumerate(zip(roots,weights)):
-        term = box_func(root)*weight
-        res+=term
-    return res
-
-def sphere_surface_area(numvars):
-    assert numvars>=1, "dimension at least one"
-    res = 0
-    if numvars %2 == 0:
-        res = 2*pow(math.pi, numvars/2)/math.factorial(numvars/2-1)
-    if numvars %2 == 1:
-        res = 2*pow(2*math.pi, (numvars-1)/2)/reduce(operator.mul, range(numvars-2,0,-2),1)
-    return res

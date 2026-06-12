@@ -10,17 +10,15 @@ from quadrature_S import sphere_Quadrature
 @lru_cache(maxsize=32)
 def funk_hecke_constant_cached(numvars: int) -> float:
     """
-    Funk-Hecke multiplicative constant used when converting a 1D integral
-    to the sphere convention used here.
+    Funk-Hecke multiplicative constant used when lifting a 1D integral against
+    the Gegenbauer weight to the sphere S^{numvars-1}.
 
-    Returns |S^{n-2}| = 2 * pi^{(n-1)/2} / Gamma((n-1)/2).
-
-    Cached by `numvars` to avoid recomputing logs/gamma repeatedly.
+    It is exactly the surface area of the equatorial sphere,
+    |S^{numvars-2}| = sphere_area(numvars - 1). Cached by `numvars`.
     """
     if numvars < 2:
         raise ValueError("numvars must be >= 2")
-    log_area = np.log(2.0) + ((numvars - 1) / 2.0) * np.log(np.pi) - sc.gammaln((numvars - 1) / 2.0)
-    return float(np.exp(log_area))
+    return sphere_area(numvars - 1)
 
 
 @lru_cache(maxsize=32)
@@ -72,10 +70,7 @@ def zonal_func_centered_at_y(
 
     if degree == 0:
         # normalized constant function on S^{n-1}
-        # area(S^{n-1}) = 2 * pi^{n/2} / Gamma(n/2)
-        log_area = np.log(2.0) + (n / 2.0) * np.log(np.pi) - sc.gammaln(n / 2.0)
-        area_sphere = float(np.exp(log_area))
-        return np.ones(Q) / np.sqrt(area_sphere)
+        return np.ones(Q) / np.sqrt(sphere_area(n))
 
     # degrees > 0
     if gegenbauer_basis is None:
@@ -135,6 +130,87 @@ def evaluate_zonals_on_centers(
     return phi
 
 
+class _DegreeBlock:
+    """Evaluation data for all harmonics of a single degree.
+
+    All harmonics of one degree are linear combinations of the SAME zonal
+    functions (same centers and Gegenbauer polynomial), differing only by the
+    coefficient rows. Storing them together lets us evaluate the shared zonal
+    matrix once per degree instead of once per harmonic.
+
+    For degree 0 the block is the single constant function and `area_sphere`
+    is set; for degree > 0, `basis_func`, `centers`, `coeffs`, `C_dim` are set.
+    """
+
+    def __init__(self, dim, *, area_sphere=None,
+                 basis_func=None, centers=None, coeffs=None, C_dim=None):
+        self.dim = dim
+        self.area_sphere = area_sphere
+        self.basis_func = basis_func
+        self.centers = centers
+        self.coeffs = coeffs
+        self.C_dim = C_dim
+
+    def evaluate(self, X):
+        """Evaluate the degree's harmonics at points X -> (dim, Q)."""
+        Q = X.shape[0]
+        if self.area_sphere is not None:
+            return np.ones((1, Q), dtype=float) / np.sqrt(self.area_sphere)
+        # Shared zonal matrix, computed ONCE for the whole degree.
+        phi = evaluate_zonals_on_centers(self.basis_func, self.centers, X)
+        phi = phi / np.sqrt(self.C_dim)                       # (dim, Q)
+        out = np.empty((self.dim, Q), dtype=float)
+        # Per-harmonic combination, identical arithmetic to the callables.
+        for i in range(self.dim):
+            out[i, :] = self.coeffs[i] @ phi
+        return out
+
+
+class HarmonicBasis:
+    """An orthonormal spherical-harmonic basis, stored by degree.
+
+    All harmonics of one degree are linear combinations of the same zonal
+    functions, so they are grouped into `_DegreeBlock` objects. The basis is
+    evaluated through `evaluate(X)` (or `evaluate_basis_matrix`), which assembles
+    the full (dim, Q) value matrix one degree at a time. `len()` returns the
+    basis dimension.
+    """
+
+    def __init__(self, blocks):
+        self._blocks = list(blocks)
+        self.dim = sum(block.dim for block in self._blocks)
+
+    def __len__(self):
+        return self.dim
+
+    def evaluate(self, X):
+        """Evaluate every basis function at points X. Returns (dim, Q)."""
+        X = np.atleast_2d(np.asarray(X, dtype=float))
+        Q = X.shape[0]
+        out = np.empty((self.dim, Q), dtype=float)
+        row = 0
+        for block in self._blocks:
+            out[row:row + block.dim, :] = block.evaluate(X)
+            row += block.dim
+        return out
+
+
+def evaluate_basis_matrix(basis, X):
+    """Evaluate a basis on points X, returning a (dim, Q) matrix.
+
+    Uses the fast per-degree path when `basis` is a HarmonicBasis; otherwise
+    falls back to looping over a plain iterable of callables.
+    """
+    X = np.atleast_2d(np.asarray(X, dtype=float))
+    if isinstance(basis, HarmonicBasis):
+        return basis.evaluate(X)
+    Q = X.shape[0]
+    out = np.empty((len(basis), Q), dtype=float)
+    for i, f in enumerate(basis):
+        out[i, :] = np.asarray(f(X), dtype=float).ravel()
+    return out
+
+
 def cholesky_with_jitter(A: np.ndarray, max_attempts: int = 6, initial_jitter: float = 0.0) -> np.ndarray:
     """
     Attempt Cholesky decomposition of A, increasing jitter on the diagonal until success
@@ -152,45 +228,16 @@ def cholesky_with_jitter(A: np.ndarray, max_attempts: int = 6, initial_jitter: f
     raise RuntimeError("Cholesky decomposition failed even after adding jitter")
 
 
-def make_harmonic_evaluator(
-    c_local: np.ndarray,
-    centers_local: np.ndarray,
-    basis_func: Callable,
-    C_dim: float,
-) -> Callable[[np.ndarray], np.ndarray]:
-    """
-    Build and return a callable phi_X(X_eval) that evaluates the linear
-    combination with coefficients `c_local` of zonal functions centered
-    at `centers_local`. This helper is fully vectorized in the evaluation.
-    """
-    centers_local = np.asarray(centers_local)
-    c_local = np.asarray(c_local)
-
-    def phi_X(X_eval: np.ndarray) -> np.ndarray:
-        X_eval = np.asarray(X_eval)
-        if X_eval.ndim == 1:
-            # single point -> convert to 2D (1, n)
-            X_eval = X_eval.reshape(1, -1)
-        if X_eval.ndim != 2:
-            raise ValueError("X_eval must be a 2D array with shape (Qe, numvars)")
-
-        # phi_matrix shape: (num_centers, Qe)
-        phi_matrix = evaluate_zonals_on_centers(basis_func, centers_local, X_eval)
-        # Normalization by Funk-Hecke constant already applied below
-        return c_local @ (phi_matrix / np.sqrt(C_dim))
-    return phi_X
-
-
 def orthonormal_harmonic_basis_numerical(
     numvars: int,
     degree: int,
     rng_seed: int = 42,
     verbose: bool = False,
-) -> List[Callable[[np.ndarray], np.ndarray]]:
+) -> "HarmonicBasis":
     """
     Generate a numerical orthonormal basis of spherical harmonics of exact `degree`
-    on S^{numvars-1}. Returns a list of callables f(X) where X has shape (Q, numvars)
-    and f(X) returns an array of length Q with evaluations.
+    on S^{numvars-1}. Returns a HarmonicBasis; evaluate it with evaluate_basis_matrix
+    (or basis.evaluate(X)), which returns a (dim, Q) value matrix.
 
     Implementation notes:
     - degree == 0 returns the exact normalized constant function.
@@ -201,19 +248,12 @@ def orthonormal_harmonic_basis_numerical(
     """
     dim = harmonics_dimension(numvars, degree)
     if dim == 0:
-        return []
+        return HarmonicBasis([])
 
     # degree == 0: exact normalized constant function
     if degree == 0:
-        log_area = np.log(2.0) + (numvars / 2.0) * np.log(np.pi) - sc.gammaln(numvars / 2.0)
-        area_sphere = float(np.exp(log_area))
-
-        def const_func(X_eval: np.ndarray) -> np.ndarray:
-            X_eval = np.atleast_2d(X_eval)
-            Qe = X_eval.shape[0]
-            return np.ones(Qe) / np.sqrt(area_sphere)
-
-        return [const_func]
+        block = _DegreeBlock(1, area_sphere=sphere_area(numvars))
+        return HarmonicBasis([block])
 
     # degree > 0: numerical construction
     quad_deg = max(2 * degree, 2)
@@ -271,20 +311,16 @@ def orthonormal_harmonic_basis_numerical(
     L_inv = np.linalg.solve(L, np.eye(L.shape[0]))
     coeffs = L_inv  # each row contains coefficients for one orthonormal basis function
 
-    # Build callables; center list and basis func captured
+    # Group all harmonics of this degree into one block for fast evaluation.
     centers_arr = np.vstack(centers_list)  # shape (dim, numvars)
-
-    basis_callables = []
-    for i in range(dim):
-        c = coeffs[i, :].copy()
-        evaluator = make_harmonic_evaluator(c, centers_arr, basis_func, C_dim)
-        basis_callables.append(evaluator)
+    block = _DegreeBlock(dim, basis_func=basis_func, centers=centers_arr,
+                         coeffs=coeffs, C_dim=C_dim)
 
     if verbose:
         condB = np.linalg.cond(B)
         print(f"Generated orthonormal basis degree={degree}, dim={dim}, cond(B)={condB:.2e}, tries={tries}")
 
-    return basis_callables
+    return HarmonicBasis([block])
 
 
 def orthonormal_harmonic_basis_up_to_degree(
@@ -292,21 +328,21 @@ def orthonormal_harmonic_basis_up_to_degree(
     max_degree: int,
     rng_seed: int = 42,
     verbose: bool = False,
-) -> List[Callable[[np.ndarray], np.ndarray]]:
+) -> "HarmonicBasis":
     """
     Generate an orthonormal basis of spherical harmonics of all degrees <= max_degree
-    by concatenating the orthonormal bases for each exact degree.
+    by concatenating the per-degree blocks.
     """
-    all_funcs: List[Callable[[np.ndarray], np.ndarray]] = []
+    all_blocks = []
     for d in range(max_degree + 1):
-        funcs_d = orthonormal_harmonic_basis_numerical(
+        basis_d = orthonormal_harmonic_basis_numerical(
             numvars=numvars,
             degree=d,
             rng_seed=rng_seed,
             verbose=verbose,
         )
-        all_funcs.extend(funcs_d)
-    return all_funcs
+        all_blocks.extend(basis_d._blocks)
+    return HarmonicBasis(all_blocks)
 
 
 def check_basis_orthonormality(
@@ -329,9 +365,7 @@ def check_basis_orthonormality(
     quad_weights = np.asarray(quad_weights, dtype=np.float64).flatten()
     quad_size = len(quad_nodes)
 
-    vals = np.zeros((dim_basis, quad_size))
-    for i, f in enumerate(basis):
-        vals[i, :] = f(quad_nodes)
+    vals = evaluate_basis_matrix(basis, quad_nodes)
 
     G = vals @ (quad_weights[:, None] * vals.T)
     L1_offdiag  = float(np.sum(np.abs(G - np.diag(np.diag(G)))))

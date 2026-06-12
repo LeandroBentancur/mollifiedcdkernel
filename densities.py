@@ -61,3 +61,18 @@ def mixture_von_mises_sphere(X, numvars, centers=None, kappas=None, weights=None
         f_tot += w * C_d * np.exp(k * (X @ mu))
 
     return f_tot
+
+
+# =========================================================
+# Density registry
+# Maps a --density name to its callable, so the experiment scripts share a
+# single list of test densities. To add a density: add one entry here.
+# =========================================================
+
+DENSITY_REGISTRY = {
+    "constant":                 lambda X: constant_density(X, numvars=X.shape[1]),
+    "von_mises_kappa2":         lambda X: von_mises_fisher_density(X, numvars=X.shape[1], kappa=2.0),
+    "von_mises_kappa3":         lambda X: von_mises_fisher_density(X, numvars=X.shape[1], kappa=3.0),
+    "mixture_von_mises_kappa3": lambda X: mixture_von_mises_sphere(X, numvars=X.shape[1], kappas=[3.0, 3.0, 3.0]),
+    "mixture_von_mises_kappa5": lambda X: mixture_von_mises_sphere(X, numvars=X.shape[1], kappas=[5.0, 5.0, 5.0]),
+}

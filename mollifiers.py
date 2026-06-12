@@ -1,7 +1,6 @@
 import numpy as np
 from scipy.integrate import quad
-from typing import Callable, List, Optional
-import harmonic_analysis_1d as ha1
+from typing import Callable
 from scipy.special import roots_gegenbauer
 
 # =========================================================
@@ -80,7 +79,9 @@ def define_gegenbauer_mollifier(numvars: int, degree: int) -> Callable[[np.ndarr
                                              np.arccos(roots_filtered),
                                              [np.pi])))
         interval_iter = zip(cut_points[:-1], cut_points[1:])
-        integrate = lambda a, b: quad(lambda th: g_raw(np.cos(th)),
+        # [0] : quad evaluates at scalar nodes; g_raw returns a length-1 array,
+        # so take its single element (avoids the scipy ndim>0 deprecation).
+        integrate = lambda a, b: quad(lambda th: g_raw(np.cos(th))[0],
                                       a, b, epsabs=1e-15, limit=400)[0]
     else:
         # Gegenbauer case
@@ -88,7 +89,9 @@ def define_gegenbauer_mollifier(numvars: int, degree: int) -> Callable[[np.ndarr
             return (1.0 - t**2)**(alpha - 0.5)
         cut_points = np.sort(np.concatenate(([-1.0], roots_filtered, [1.0])))
         interval_iter = zip(cut_points[:-1], cut_points[1:])
-        integrate = lambda a, b: quad(lambda tt: g_raw(tt) * weight(tt),
+        # [0] : quad evaluates at scalar nodes; g_raw returns a length-1 array,
+        # so take its single element (avoids the scipy ndim>0 deprecation).
+        integrate = lambda a, b: quad(lambda tt: g_raw(tt)[0] * weight(tt),
                                       a, b, epsabs=1e-15, limit=400)[0]
 
     # ---- 4) Normalization constant ------------------------------
@@ -106,47 +109,3 @@ def define_gegenbauer_mollifier(numvars: int, degree: int) -> Callable[[np.ndarr
         return float(vals.item()) if np.isscalar(t) else vals
 
     return gegenbauer_mollifier
-
-def define_projected_gegenbauer_mollifier(
-    numvars: int,
-    degree: int,
-    method: str = "quadrature",
-    n_nodes: Optional[int] = None,
-    tol: float = 1e-12,
-    verbose: bool = False,
-) -> List[float]:
-    """
-    Build the gegenbauer_mollifier and return its projection coefficients on the Gegenbauer basis.
-    """
-    gegenbauer_mollifier = define_gegenbauer_mollifier(numvars, degree)
-    if method == "quadrature" and n_nodes is None:
-        n_nodes = 1000 * (degree + 1)
-
-    return ha1.define_projection(
-        func=gegenbauer_mollifier,
-        numvars=numvars,
-        degree=degree,
-        method=method,
-        n_nodes=n_nodes,
-        tol=tol,
-        verbose=verbose,
-    )
-
-# =========================================================
-# Define the mollifier given by the von Mises density
-# =========================================================
-
-def make_vonmises_1d(kappa=5.0, alpha=0.5):
-    xs = np.linspace(-1.0, 1.0, 1000)
-    g = np.exp(kappa * xs)
-    w = (1.0 - xs**2)**alpha
-    norm = np.trapz(g * w, xs)
-    def mollifier(t):
-        t_arr = np.asarray(t)
-        values = np.exp(kappa * t_arr) / norm
-        return values
-    return mollifier
-
-
-
-

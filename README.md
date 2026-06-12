@@ -2,11 +2,9 @@
 
 This repository contains the numerical experiments accompanying the paper
 
-**Mollified Christoffel–Darboux Kernels and Density Recovery on Varieties**  
-Leandro Bentancur, Didier Henrion, Mauricio Velasco  
-
-Preprint available at:  
-https://hal.science/hal-05544709
+**Mollified Christoffel-Darboux Kernels and Density Recovery on Varieties**
+Leandro Bentancur, Didier Henrion, Mauricio Velasco
+Preprint, 2026. arXiv:[2603.09462](https://arxiv.org/abs/2603.09462)
 
 ---
 
@@ -53,7 +51,7 @@ and verify the convergence rates predicted by the theory.
 |------|------|
 | `harmonic_analysis_1d.py` | Gegenbauer polynomial basis on [-1,1]: recurrence, norms, L² projection |
 | `harmonic_basis.py` | Orthonormal spherical harmonic basis on S^{n-1} via numerical Gram-Schmidt on zonal functions |
-| `christoffel.py` | Core estimator: moment matrix, Funk-Hecke λ-vector, MCD polynomial evaluator, infinite Christoffel function |
+| `christoffel.py` | Core estimator. Public API: `estimate_density` (f_hat = 1/MCD) and `mcd_polynomial` (the MCD diagonal). Internals: moment matrix, Funk-Hecke λ-vector, MCD evaluator, infinite Christoffel reference |
 | `quadrature_S.py` | Spherical quadrature rules via recursive Gauss-Gegenbauer product construction |
 | `mollifiers.py` | Mollifier functions: polynomial mollifier, Gegenbauer-root mollifier, von Mises mollifier, default degree schedule |
 | `densities.py` | Test densities on the sphere: von Mises-Fisher, mixtures, constant |
@@ -138,38 +136,26 @@ Output is saved to `error_charts_polynomial/`.
 
 ```python
 import numpy as np
-import harmonic_basis as hb
-import mollifiers as mol
-import densities as dens
 import christoffel as ch
+import densities as dens
 from quadrature_S import sphere_Quadrature
 
-numvars = 3   # points live on S² ⊂ R³
+numvars = 3    # points live on S² ⊂ R³
 degree  = 20
 
-# 1. Build orthonormal spherical harmonic basis up to degree d
-basis = hb.orthonormal_harmonic_basis_up_to_degree(numvars, degree)
+# Target density on S²
+density = lambda X: dens.von_mises_fisher_density(X, numvars=numvars, kappa=3.0)
 
-# 2. Define a target density and the default mollifier (k = floor(d^{4/3}))
-density   = lambda X: dens.von_mises_fisher_density(X, numvars=numvars, kappa=3.0)
-mollifier = mol.default_mollifier(numvars=numvars, deg=degree)
-
-# 3. Build quadrature rule and compute the moment matrix
+# Points where the estimate is returned, with weights used to normalize it
 quad_pts, quad_wts = sphere_Quadrature(numvars, 2 * degree)
 quad_pts = np.asarray(quad_pts, dtype=np.float64)
 quad_wts = np.asarray(quad_wts, dtype=np.float64)
 
-M = ch.compute_moment_matrix_on_sphere(
-    basis, density, numvars=numvars,
-    method="quadrature", quadrature_degree=2 * degree)
-
-# 4. Evaluate the MCD polynomial at the quadrature points
-mcd_poly = ch.mollified_christoffel_evaluator(
-    quad_pts, M, basis, numvars, degree, mollifier)
-
-# 5. The density estimate is 1 / MCD, normalized to integrate to 1
-estimate = 1.0 / mcd_poly
-estimate /= np.sum(quad_wts * estimate)
+# MCD density estimate, normalized to integrate to 1. The default polynomial
+# mollifier (k = floor(d^{4/3})) and the orthonormal spherical-harmonic basis
+# are built internally.
+estimate = ch.estimate_density(
+    density, numvars, degree, quad_pts, normalize_weights=quad_wts)
 ```
 
 ---
@@ -182,13 +168,16 @@ This project is licensed under the MIT License. See [LICENSE](LICENSE) for detai
 
 ## Citation
 
-If you use this code in your research, please cite:
+If you use this code in your research, please cite the paper:
 
 ```bibtex
-@article{BentancurHenrionVelasco2025,
-  title  = {Mollified Christoffel-Darboux Kernels and Density Recovery on Varieties},
-  author = {Bentancur, Leandro and Henrion, Didier and Velasco, Mauricio},
-  year   = {2025},
-  note   = {Preprint}
+@article{BentancurHenrionVelasco2026,
+  title         = {Mollified Christoffel-Darboux Kernels and Density Recovery on Varieties},
+  author        = {Bentancur, Leandro and Henrion, Didier and Velasco, Mauricio},
+  year          = {2026},
+  eprint        = {2603.09462},
+  archivePrefix = {arXiv},
+  note          = {Preprint},
+  url           = {https://arxiv.org/abs/2603.09462}
 }
 ```
